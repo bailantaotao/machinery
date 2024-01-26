@@ -136,6 +136,10 @@ func (b *Backend) TriggerChord(groupUUID string) (bool, error) {
 	}
 	defer b.unlockGroupMeta(groupUUID)
 
+	if groupMeta.ChordTriggered {
+		return false, nil
+	}
+
 	// update group meta data
 	err = b.chordTriggered(groupUUID)
 	if err != nil {
