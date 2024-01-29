@@ -111,30 +111,28 @@ func (b *Backend) GroupTaskStates(groupUUID string, groupTaskCount int) ([]*task
 
 // TriggerChord ...
 func (b *Backend) TriggerChord(groupUUID string) (bool, error) {
-	// Get the group meta data
-	groupMeta, err := b.getGroupMeta(groupUUID)
+	groupMeta := &tasks.GroupMeta{}
+	var err error
 
-	if err != nil {
-		return false, err
+	// try to get lock first
+	for !groupMeta.Lock {
+		if err := b.lockGroupMeta(groupUUID); err != nil {
+			log.WARNING.Printf("Group [%s] locked, waiting", groupUUID)
+			time.Sleep(time.Second * 5)
+			continue
+		}
+		// Get the group meta data
+		groupMeta, err = b.getGroupMeta(groupUUID)
+		if err != nil {
+			return false, err
+		}
 	}
+	defer b.unlockGroupMeta(groupUUID)
 
 	// Chord has already been triggered, return false (should not trigger again)
 	if groupMeta.ChordTriggered {
 		return false, nil
 	}
-
-	// If group meta is locked, wait until it's unlocked
-	for groupMeta.Lock {
-		groupMeta, _ = b.getGroupMeta(groupUUID)
-		log.WARNING.Printf("Group [%s] locked, waiting", groupUUID)
-		time.Sleep(time.Millisecond * 5)
-	}
-
-	// Acquire lock
-	if err = b.lockGroupMeta(groupUUID); err != nil {
-		return false, err
-	}
-	defer b.unlockGroupMeta(groupUUID)
 
 	// update group meta data
 	err = b.chordTriggered(groupUUID)
@@ -368,15 +366,19 @@ func (b *Backend) updateGroupMetaLock(groupUUID string, status bool) error {
 			":l": {
 				BOOL: aws.Bool(status),
 			},
+			":ul": {
+				BOOL: aws.Bool(!status),
+			},
 		},
 		Key: map[string]*dynamodb.AttributeValue{
 			"GroupUUID": {
 				S: aws.String(groupUUID),
 			},
 		},
-		ReturnValues:     aws.String("UPDATED_NEW"),
-		TableName:        aws.String(b.cnf.DynamoDB.GroupMetasTable),
-		UpdateExpression: aws.String("SET #L = :l"),
+		ReturnValues:        aws.String("UPDATED_NEW"),
+		TableName:           aws.String(b.cnf.DynamoDB.GroupMetasTable),
+		UpdateExpression:    aws.String("SET #L = :l"),
+		ConditionExpression: aws.String("#L = :ul"),
 	}
 
 	_, err := b.client.UpdateItem(input)
